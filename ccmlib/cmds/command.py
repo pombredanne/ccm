@@ -1,14 +1,15 @@
-from optparse import OptionParser, BadOptionError, Option
-import os, sys, shutil
+import sys
+from optparse import BadOptionError, Option, OptionParser
 
-L = os.path.realpath(__file__).split(os.path.sep)[:-2]
-root = os.path.sep.join(L)
-sys.path.append(os.path.join(root, 'ccm_lib'))
-import common
+from six import print_
+
+from ccmlib import common
+from ccmlib.cluster_factory import ClusterFactory
 
 
 # This is fairly fragile, but handy for now
 class ForgivingParser(OptionParser):
+
     def __init__(self, usage=None, option_list=None, option_class=Option, version=None, conflict_handler="error", description=None, formatter=None, add_help_option=True, prog=None, epilog=None):
         OptionParser.__init__(self, usage, option_list, option_class, version, conflict_handler, description, formatter, add_help_option, prog, epilog)
         self.ignored = []
@@ -36,11 +37,13 @@ class ForgivingParser(OptionParser):
     def get_ignored(self):
         return self.ignored
 
+
 class Cmd(object):
+
     def get_parser(self):
         pass
 
-    def validate(self, parser, options, args, cluster_name=False, node_name=False, load_cluster=False):
+    def validate(self, parser, options, args, cluster_name=False, node_name=False, load_cluster=False, load_node=True):
         self.options = options
         self.args = args
         if options.config_dir is None:
@@ -49,54 +52,49 @@ class Cmd(object):
             self.path = options.config_dir
 
         if cluster_name:
-          if len(args) == 0:
-              print >> sys.stderr, 'Missing cluster name'
-              parser.print_help()
-              exit(1)
-          self.name = args[0]
+            if len(args) == 0:
+                print_('Missing cluster name', file=sys.stderr)
+                parser.print_help()
+                exit(1)
+            self.name = args[0]
         if node_name:
-          if len(args) == 0:
-              print >> sys.stderr, 'Missing node name'
-              parser.print_help()
-              exit(1)
-          self.name = args[0]
+            if len(args) == 0:
+                print_('Missing node name', file=sys.stderr)
+                parser.print_help()
+                exit(1)
+            self.name = args[0]
 
         if load_cluster:
-            self.cluster = common.load_current_cluster(self.path)
-            if node_name:
+            self.cluster = self._load_current_cluster()
+            if node_name and load_node:
                 try:
                     self.node = self.cluster.nodes[self.name]
                 except KeyError:
-                    print >> sys.stderr, 'Unknown node %s in cluster %s' % (self.name, self.cluster.name)
+                    print_('Unknown node %s in cluster %s' % (self.name, self.cluster.name), file=sys.stderr)
                     exit(1)
-
-        if hasattr(self, 'use_cassandra_dir'):
-            d = options.cassandra_dir
-            bin_dir = os.path.join(d, common.CASSANDRA_BIN_DIR)
-            conf_dir = os.path.join(d, common.CASSANDRA_CONF_DIR)
-            cnd = os.path.exists(bin_dir)
-            cnd = cnd and os.path.exists(conf_dir)
-            cnd = cnd and os.path.exists(os.path.join(conf_dir, common.CASSANDRA_CONF))
-            cnd = cnd and os.path.exists(os.path.join(conf_dir, common.LOG4J_CONF))
-            if not cnd:
-                print >> sys.stderr, '%s does not appear to be a cassandra source directory' % d
-                exit(1)
 
     def run(self):
         pass
 
-    def _get_default_parser(self, usage, description, cassandra_dir=False, ignore_unknown_options=False):
+    def _get_default_parser(self, usage, description, ignore_unknown_options=False):
         if ignore_unknown_options:
             parser = ForgivingParser(usage=usage, description=description)
         else:
             parser = OptionParser(usage=usage, description=description)
         parser.add_option('--config-dir', type="string", dest="config_dir",
-            help="Directory for the cluster files [default to ~/.ccm]")
-        if cassandra_dir:
-            parser.add_option("--cassandra-dir", type="string", dest="cassandra_dir",
-                    help="Path to the cassandra directory to use [default %default]", default="./")
-            self.use_cassandra_dir = True
+                          help="Directory for the cluster files [default to {0}]".format(common.get_default_path_display_name()))
         return parser
 
-    def description():
+    def description(self):
         return ""
+
+    def _load_current_cluster(self):
+        name = common.current_cluster_name(self.path)
+        if name is None:
+            print_('No currently active cluster (use ccm cluster switch)')
+            exit(1)
+        try:
+            return ClusterFactory.load(self.path, name)
+        except common.LoadError as e:
+            print_(str(e))
+            exit(1)
